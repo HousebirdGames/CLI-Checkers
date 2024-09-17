@@ -10,8 +10,7 @@ const rl = readline.createInterface({
 
 let gameState = initializeGameState();
 
-nextRound(gameState);
-
+hideCursor();
 drawGameState(gameState);
 
 let lastKeyPressTime = 0;
@@ -20,7 +19,7 @@ process.stdin.on('keypress', function (ch, key) {
     if (gameState.stopDrawing) return;
 
     const now = Date.now();
-    if (now - lastKeyPressTime < 200) return;
+    if (now - lastKeyPressTime < 100) return;
     lastKeyPressTime = now;
 
     if (key) {
@@ -45,14 +44,16 @@ process.stdin.on('keypress', function (ch, key) {
             case 'escape':
                 gameState.stopDrawing = true;
                 gameState.message = 'Exiting game';
-                console.log('');
-                console.log('Exited game');
-                console.log('');
+                drawGameState(gameState);
+                showCursor();
                 rl.close();
+                process.exit(0);
                 break;
             case 'backspace':
             case 'c':
                 gameState.hasSelectedPiece = false;
+                gameState.selectedPiece = null;
+                gameState.possibleMoves = [];
                 break;
         }
     }
@@ -63,123 +64,120 @@ process.stdin.on('keypress', function (ch, key) {
 function moveSelection(rowChange, colChange) {
     gameState.message = '';
 
-    if (gameState.hasSelectedPiece) {
-        return;
+    let newRow = gameState.cursorPosition.row + rowChange;
+    let newCol = gameState.cursorPosition.col + colChange;
+
+    if (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+        gameState.cursorPosition.row = newRow;
+        gameState.cursorPosition.col = newCol;
     }
-
-    let newRow = gameState.selectedPiece.row + rowChange;
-    let newCol = gameState.selectedPiece.col + colChange;
-    gameState.debug = `New row: ${newRow}, New col: ${newCol}`;
-
-    while (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
-        let colToCheck = newCol;
-        if (newRow % 2 != 0 && rowChange != 0) {
-            colToCheck += 1;
-        }
-        else if (gameState.selectedPiece.col % 2 != 0 && rowChange != 0) {
-            colToCheck -= 1;
-        }
-
-        if (gameState.board[newRow][colToCheck] === gameState.currentPlayer) {
-            gameState.selectedPiece.row = newRow;
-            gameState.selectedPiece.col = colToCheck;
-            break;
-        }
-
-        //check the entire row, before coninuing to the next row
-        if (colToCheck < 0 || colToCheck >= 8 && rowChange != 0) {
-            newCol += colToCheck;
-            continue;
-        }
-
-        newRow += rowChange;
-        newCol += colChange;
-    }
-    //gameState.debug = `New row: ${newRow}, New col: ${newCol}`;
-}
-
-function moveSelectionWithoutChecks(rowChange, colChange) {
-    gameState.selectedPiece.row += rowChange;
-    gameState.selectedPiece.col += colChange;
 }
 
 function handleReturnKey(gameState) {
     gameState.message = '';
+    const row = gameState.cursorPosition.row;
+    const col = gameState.cursorPosition.col;
+    const cell = gameState.board[row][col];
+
     if (!gameState.hasSelectedPiece) {
-        if (gameState.board[gameState.selectedPiece.row][gameState.selectedPiece.col] === gameState.currentPlayer) {
+        if (cell.toLowerCase() === gameState.currentPlayer) {
+            gameState.selectedPiece = { row, col };
             gameState.hasSelectedPiece = true;
             updatePossibleMoves(gameState);
             if (gameState.possibleMoves.length === 0) {
                 gameState.hasSelectedPiece = false;
+                gameState.selectedPiece = null;
                 gameState.message = 'This piece has no possible moves';
             }
+        } else {
+            gameState.message = 'Select one of your own pieces';
         }
     } else {
-        if (gameState.possibleMoves.length == 0) {
-            return;
+        const move = gameState.possibleMoves.find(m => m.row === row && m.col === col);
+        if (move) {
+            performMoveOrCapture(gameState, move);
+            if (move.isCapture) {
+                updatePossibleMoves(gameState);
+                if (gameState.possibleMoves.some(m => m.isCapture)) {
+                    gameState.message = 'You can make another capture';
+                } else {
+                    nextRound(gameState);
+                }
+            } else {
+                nextRound(gameState);
+            }
+        } else {
+            gameState.message = 'Invalid move, piece unselected';
+            gameState.hasSelectedPiece = false;
+            gameState.selectedPiece = null;
+            gameState.possibleMoves = [];
         }
-        performMoveOrCapture(gameState);
-        nextRound(gameState);
     }
 }
 
 function nextRound(gameState) {
-    gameState.currentPlayer = gameState.currentPlayer === 'X' ? 'O' : 'X';
+    gameState.currentPlayer = gameState.currentPlayer === 'x' ? 'o' : 'x';
     gameState.hasSelectedPiece = false;
+    gameState.selectedPiece = null;
+    gameState.possibleMoves = [];
     gameState.round++;
 
-    gameState.message = `Turn ${gameState.round}: Player ${gameState.currentPlayer} to move`;
+    gameState.message = `Turn ${gameState.round}: Player ${gameState.currentPlayer.toUpperCase()} to move`;
 
+    outerLoop:
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            if (gameState.board[row][col] === gameState.currentPlayer) {
-                gameState.selectedPiece.row = row;
-                gameState.selectedPiece.col = col;
-                break;
+            if (gameState.board[row][col].toLowerCase() === gameState.currentPlayer) {
+                gameState.cursorPosition.row = row;
+                gameState.cursorPosition.col = col;
+                break outerLoop;
             }
         }
     }
-    gameState.possibleMoves = [];
-}
 
-function performMoveOrCapture(gameState) {
-    // Assuming the piece to move is already selected and stored in gameState.selectedPiece
-    // For simplicity, just move forward diagonally to the left or right if the space is empty
-    // More complex logic needed for capturing and checking for valid moves
-
-    let targetRow = gameState.currentPlayer === 'X' ? gameState.selectedPiece.row + 1 : gameState.selectedPiece.row - 1;
-    let targetColLeft = gameState.selectedPiece.col - 1;
-    let targetColRight = gameState.selectedPiece.col + 1;
-
-    // Check if the target position is within bounds and empty for a simple move
-    if (targetRow >= 0 && targetRow < 8) {
-        if (targetColLeft >= 0 && gameState.board[targetRow][targetColLeft] === ' ') {
-            // Move piece to the left diagonally
-            gameState.board[gameState.selectedPiece.row][gameState.selectedPiece.col] = ' ';
-            gameState.board[targetRow][targetColLeft] = gameState.currentPlayer;
-            gameState.selectedPiece.row = targetRow;
-            gameState.selectedPiece.col = targetColLeft;
-        } else if (targetColRight < 8 && gameState.board[targetRow][targetColRight] === ' ') {
-            // Move piece to the right diagonally
-            gameState.board[gameState.selectedPiece.row][gameState.selectedPiece.col] = ' ';
-            gameState.board[targetRow][targetColRight] = gameState.currentPlayer;
-            gameState.selectedPiece.row = targetRow;
-            gameState.selectedPiece.col = targetColRight;
-        }
-        // Add capturing logic here
+    if (!playerHasMoves(gameState)) {
+        const winner = gameState.currentPlayer === 'x' ? 'O' : 'X';
+        gameState.message = `Player ${winner} wins. Congratulations!`;
+        gameState.stopDrawing = true;
+        drawGameState(gameState);
+        showCursor();
+        rl.close();
+        process.exit(0);
     }
 }
 
-// Update the initializeGameState function to include 'hasSelectedPiece'
+function performMoveOrCapture(gameState, move) {
+    const fromRow = gameState.selectedPiece.row;
+    const fromCol = gameState.selectedPiece.col;
+    const toRow = move.row;
+    const toCol = move.col;
+
+    gameState.board[toRow][toCol] = gameState.board[fromRow][fromCol];
+    gameState.board[fromRow][fromCol] = ' ';
+
+    if (move.isCapture) {
+        const capturedRow = move.capturedPiece.row;
+        const capturedCol = move.capturedPiece.col;
+        gameState.board[capturedRow][capturedCol] = ' ';
+    }
+
+    if ((gameState.currentPlayer === 'x' && toRow === 0) || (gameState.currentPlayer === 'o' && toRow === 7)) {
+        gameState.board[toRow][toCol] = gameState.currentPlayer.toUpperCase();
+    }
+
+    gameState.selectedPiece.row = toRow;
+    gameState.selectedPiece.col = toCol;
+}
+
 function initializeGameState() {
     let board = [];
     for (let i = 0; i < 8; i++) {
         let row = [];
         for (let j = 0; j < 8; j++) {
-            if (i < 3 && (i + j) % 2 === 0) {
-                row.push('X');
-            } else if (i > 4 && (i + j) % 2 === 0) {
-                row.push('O');
+            if (i < 3 && (i + j) % 2 === 1) {
+                row.push('o');
+            } else if (i > 4 && (i + j) % 2 === 1) {
+                row.push('x');
             } else {
                 row.push(' ');
             }
@@ -188,90 +186,125 @@ function initializeGameState() {
     }
     return {
         board: board,
-        currentPlayer: 'X',
-        selectedPiece: { row: 0, col: 0 },
-        round: 0,
+        currentPlayer: 'x',
+        cursorPosition: { row: 0, col: 1 },
+        selectedPiece: null,
+        round: 1,
         hasSelectedPiece: false,
         possibleMoves: [],
-        message: '',
+        message: `Turn 1: Player X to move`,
         stopDrawing: false,
     };
 }
 
 function updatePossibleMoves(gameState) {
-    gameState.possibleMoves = []; // Reset possible moves
+    gameState.possibleMoves = [];
 
-    let dir = gameState.currentPlayer === 'X' ? 1 : -1; // Direction of movement based on player
-    let enemy = gameState.currentPlayer === 'X' ? 'O' : 'X';
+    let piece = gameState.board[gameState.selectedPiece.row][gameState.selectedPiece.col];
+    let isKing = piece === piece.toUpperCase();
+    let enemyPieces = gameState.currentPlayer === 'x' ? ['o', 'O'] : ['x', 'X'];
+
+    let directions = [];
+    if (isKing) {
+        directions.push({ rowDir: 1, colDir: -1 });
+        directions.push({ rowDir: 1, colDir: 1 });
+        directions.push({ rowDir: -1, colDir: -1 });
+        directions.push({ rowDir: -1, colDir: 1 });
+    } else {
+        let dir = gameState.currentPlayer === 'x' ? -1 : 1;
+        directions.push({ rowDir: dir, colDir: -1 });
+        directions.push({ rowDir: dir, colDir: 1 });
+    }
 
     let row = gameState.selectedPiece.row;
     let col = gameState.selectedPiece.col;
 
-    // Check for forward moves
-    if (row + dir >= 0 && row + dir < 8) {
-        if (col - 1 >= 0 && gameState.board[row + dir][col - 1] === ' ') {
-            gameState.possibleMoves.push({ row: row + dir, col: col - 1 });
-        }
-        if (col + 1 < 8 && gameState.board[row + dir][col + 1] === ' ') {
-            gameState.possibleMoves.push({ row: row + dir, col: col + 1 });
-        }
-    }
+    for (const direction of directions) {
+        const newRow = row + direction.rowDir;
+        const newCol = col + direction.colDir;
 
-    // Check for captures
-    if (row + 2 * dir >= 0 && row + 2 * dir < 8) {
-        if (col - 2 >= 0 && gameState.board[row + dir][col - 1] === enemy && gameState.board[row + 2 * dir][col - 2] === ' ') {
-            gameState.possibleMoves.push({ row: row + 2 * dir, col: col - 2 });
-        }
-        if (col + 2 < 8 && gameState.board[row + dir][col + 1] === enemy && gameState.board[row + 2 * dir][col + 2] === ' ') {
-            gameState.possibleMoves.push({ row: row + 2 * dir, col: col + 2 });
+        if (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+            if (gameState.board[newRow][newCol] === ' ') {
+                gameState.possibleMoves.push({ row: newRow, col: newCol, isCapture: false });
+            } else if (enemyPieces.includes(gameState.board[newRow][newCol])) {
+                const jumpRow = newRow + direction.rowDir;
+                const jumpCol = newCol + direction.colDir;
+                if (jumpRow >= 0 && jumpRow < 8 && jumpCol >= 0 && jumpCol < 8 && gameState.board[jumpRow][jumpCol] === ' ') {
+                    gameState.possibleMoves.push({
+                        row: jumpRow,
+                        col: jumpCol,
+                        isCapture: true,
+                        capturedPiece: { row: newRow, col: newCol }
+                    });
+                }
+            }
         }
     }
+}
+
+function playerHasMoves(gameState) {
+    const player = gameState.currentPlayer;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (gameState.board[row][col].toLowerCase() === player) {
+                gameState.selectedPiece = { row, col };
+                updatePossibleMoves(gameState);
+                if (gameState.possibleMoves.length > 0) {
+                    gameState.selectedPiece = null;
+                    return true;
+                }
+            }
+        }
+    }
+    gameState.selectedPiece = null;
+    return false;
 }
 
 function drawGameState(gameState) {
     if (gameState.stopDrawing) return;
 
     let output = '';
-    output += `Current player: ${gameState.currentPlayer}\n`;
-    output += `Selected piece: ${gameState.selectedPiece.row}, ${gameState.selectedPiece.col}\n`;
+    output += `Current player: ${gameState.currentPlayer.toUpperCase()}\n`;
     output += `Round: ${gameState.round}\n`;
-    output += `Possible moves: ${JSON.stringify(gameState.possibleMoves)}\n`;
     output += '--------------------------\n';
     for (let i = 0; i < 8; i++) {
-        let row = '|';
+        let rowStr = '|';
         for (let j = 0; j < 8; j++) {
             let cell = gameState.board[i][j];
-            if (i === gameState.selectedPiece.row && j === gameState.selectedPiece.col) {
-                row += '[' + cell + ']';
-            } else if (gameState.hasSelectedPiece && canMoveOrCapture(gameState, i, j)) {
-                // Indicate possible move or capture
-                row += cell === ' ' ? '> <' : `${gameState.currentPlayer === 'X' ? ' O ' : ' X '}`;
-            } else {
-                row += ' ' + cell + ' ';
+
+            let cellStr = ' ' + cell + ' ';
+
+            if (gameState.cursorPosition.row === i && gameState.cursorPosition.col === j) {
+                cellStr = '[' + cell + ']';
+            } else if (gameState.hasSelectedPiece && gameState.selectedPiece.row === i && gameState.selectedPiece.col === j) {
+                cellStr = '{' + cell + '}';
+            } else if (gameState.hasSelectedPiece && gameState.possibleMoves.some(m => m.row === i && m.col === j)) {
+                cellStr = '(' + cell + ')';
             }
+
+            rowStr += cellStr;
         }
-        row += '|';
-        output += row + '\n';
+        rowStr += '|';
+        output += rowStr + '\n';
     }
     output += '--------------------------\n';
-    output += gameState.hasSelectedPiece ? `Use arrow keys to navigate and 'spacebar' to select\n` : `'c' to unselect and 'spacebar' to move\n`;
+    output += gameState.hasSelectedPiece
+        ? `Use arrow keys to select destination and 'spacebar' to move\n`
+        : `Use arrow keys to select a piece and 'spacebar' to select it\n`;
+    output += `'c' to unselect piece, 'escape' to quit\n`;
     output += gameState.message;
-    console.clear();
+
+    process.stdout.write('\x1B[?25l'); // Hide cursor
+    readline.cursorTo(process.stdout, 0, 0);
+    readline.clearScreenDown(process.stdout);
     console.log(output);
+    process.stdout.write('\x1B[?25h'); // Show cursor
 }
 
-function canMoveOrCapture(gameState, row, col) {
-    // Simplified logic to check for possible moves or captures
-    let dir = gameState.currentPlayer === 'X' ? 1 : -1; // Direction of movement based on player
-    let enemy = gameState.currentPlayer === 'X' ? 'O' : 'X';
-    // Check for forward moves
-    if (gameState.board[row][col] === ' ' && Math.abs(row - gameState.selectedPiece.row) === 1 && Math.abs(col - gameState.selectedPiece.col) === 1) {
-        return true; // Empty and diagonal to the selected piece
-    }
-    // Check for captures
-    if (gameState.board[row][col] === enemy && Math.abs(row - gameState.selectedPiece.row) === 1 && Math.abs(col - gameState.selectedPiece.col) === 1) {
-        // Further checks for capture logic can be added here
-        return true; // Enemy piece in a diagonal position
-    }
-    return false;
+function hideCursor() {
+    process.stdout.write('\x1B[?25l');
+}
+
+function showCursor() {
+    process.stdout.write('\x1B[?25h');
 }
