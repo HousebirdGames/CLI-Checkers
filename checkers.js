@@ -1,67 +1,96 @@
 const readline = require('readline');
 const keypress = require('keypress');
 
-keypress(process.stdin);
-
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-let gameState = initializeGameState();
+// Initialize keypress on stdin
+keypress(process.stdin);
 
-hideCursor();
-drawGameState(gameState);
-
-let lastKeyPressTime = 0;
-
-process.stdin.on('keypress', function (ch, key) {
-    if (gameState.stopDrawing) return;
-
-    const now = Date.now();
-    if (now - lastKeyPressTime < 100) return;
-    lastKeyPressTime = now;
-
-    if (key) {
-
-        switch (key.name) {
-            case 'up':
-                moveSelection(-1, 0);
-                break;
-            case 'down':
-                moveSelection(1, 0);
-                break;
-            case 'left':
-                moveSelection(0, -1);
-                break;
-            case 'right':
-                moveSelection(0, 1);
-                break;
-            case 'return':
-            case 'space':
-                handleReturnKey(gameState);
-                break;
-            case 'escape':
-                gameState.stopDrawing = true;
-                gameState.message = 'Exiting game';
-                drawGameState(gameState);
-                showCursor();
-                rl.close();
-                process.exit(0);
-                break;
-            case 'backspace':
-            case 'c':
-                gameState.hasSelectedPiece = false;
-                gameState.selectedPiece = null;
-                gameState.possibleMoves = [];
-                break;
-        }
-    }
-
-    drawGameState(gameState);
+// Handle process termination gracefully
+process.on('SIGINT', () => {
+    showCursor();
+    console.log('\nGame interrupted. Goodbye!');
+    process.exit(0);
 });
 
-function moveSelection(rowChange, colChange) {
+process.on('uncaughtException', (error) => {
+    showCursor();
+    console.error('Unexpected error:', error.message);
+    process.exit(1);
+});
+
+// Ask the user if they want to play against the AI
+rl.question('Do you want to play against the AI? (y/n): ', (answer) => {
+    let isSinglePlayer = answer.trim().toLowerCase() === 'y';
+
+    // Initialize game state
+    let gameState = initializeGameState(isSinglePlayer);
+
+    hideCursor();
+    drawGameState(gameState);
+
+    let lastKeyPressTime = 0;
+
+    // Set stdin to raw mode to capture keypress events
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+
+    process.stdin.on('keypress', function (ch, key) {
+        if (gameState.stopDrawing || (gameState.isSinglePlayer && gameState.currentPlayer === 'o')) return;
+
+        const now = Date.now();
+        if (now - lastKeyPressTime < 100) return; // Debounce keypresses
+        lastKeyPressTime = now;
+
+        if (key) {
+            switch (key.name) {
+                case 'up':
+                    moveSelection(gameState, -1, 0);
+                    break;
+                case 'down':
+                    moveSelection(gameState, 1, 0);
+                    break;
+                case 'left':
+                    moveSelection(gameState, 0, -1);
+                    break;
+                case 'right':
+                    moveSelection(gameState, 0, 1);
+                    break;
+                case 'return':
+                case 'space':
+                    handleReturnKey(gameState);
+                    break;
+                case 'escape':
+                    gameState.stopDrawing = true;
+                    gameState.message = 'Exiting game';
+                    drawGameState(gameState);
+                    showCursor();
+                    rl.close();
+                    process.exit(0);
+                    break;
+                case 'backspace':
+                case 'c':
+                    gameState.hasSelectedPiece = false;
+                    gameState.selectedPiece = null;
+                    gameState.possibleMoves = [];
+                    break;
+            }
+        }
+
+        drawGameState(gameState);
+    });
+});
+
+/**
+ * Moves the selection cursor on the board.
+ * @param {Object} gameState - The current state of the game.
+ * @param {number} rowChange - The change in the row position.
+ * @param {number} colChange - The change in the column position.
+ */
+function moveSelection(gameState, rowChange, colChange) {
     gameState.message = '';
 
     let newRow = gameState.cursorPosition.row + rowChange;
@@ -73,10 +102,21 @@ function moveSelection(rowChange, colChange) {
     }
 }
 
+/**
+ * Handles the action when the return or space key is pressed.
+ * @param {Object} gameState - The current state of the game.
+ */
 function handleReturnKey(gameState) {
     gameState.message = '';
     const row = gameState.cursorPosition.row;
     const col = gameState.cursorPosition.col;
+    
+    // Validate cursor position
+    if (row < 0 || row >= 8 || col < 0 || col >= 8) {
+        gameState.message = 'Invalid position';
+        return;
+    }
+    
     const cell = gameState.board[row][col];
 
     if (!gameState.hasSelectedPiece) {
@@ -115,6 +155,10 @@ function handleReturnKey(gameState) {
     }
 }
 
+/**
+ * Advances the game to the next round.
+ * @param {Object} gameState - The current state of the game.
+ */
 function nextRound(gameState) {
     gameState.currentPlayer = gameState.currentPlayer === 'x' ? 'o' : 'x';
     gameState.hasSelectedPiece = false;
@@ -124,33 +168,57 @@ function nextRound(gameState) {
 
     gameState.message = `Turn ${gameState.round}: Player ${gameState.currentPlayer.toUpperCase()} to move`;
 
-    outerLoop:
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (gameState.board[row][col].toLowerCase() === gameState.currentPlayer) {
-                gameState.cursorPosition.row = row;
-                gameState.cursorPosition.col = col;
-                break outerLoop;
+    if (gameState.isSinglePlayer && gameState.currentPlayer === 'o') {
+        // AI's turn
+        setTimeout(() => {
+            performAIMove(gameState);
+            if (!gameState.stopDrawing) {
+                nextRound(gameState);
+                drawGameState(gameState);
+            }
+        }, 500); // Delay to simulate thinking time
+    } else {
+        // Human player's turn
+        outerLoop:
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                if (gameState.board[row][col].toLowerCase() === gameState.currentPlayer) {
+                    gameState.cursorPosition.row = row;
+                    gameState.cursorPosition.col = col;
+                    break outerLoop;
+                }
             }
         }
-    }
 
-    if (!playerHasMoves(gameState)) {
-        const winner = gameState.currentPlayer === 'x' ? 'O' : 'X';
-        gameState.message = `Player ${winner} wins. Congratulations!`;
-        gameState.stopDrawing = true;
-        drawGameState(gameState);
-        showCursor();
-        rl.close();
-        process.exit(0);
+        if (!playerHasMoves(gameState)) {
+            const winner = gameState.currentPlayer === 'x' ? 'O' : 'X';
+            gameState.message = `Player ${winner} wins. Congratulations!`;
+            gameState.stopDrawing = true;
+            drawGameState(gameState);
+            showCursor();
+            process.exit(0);
+        }
     }
 }
 
+/**
+ * Performs a move or capture action.
+ * @param {Object} gameState - The current state of the game.
+ * @param {Object} move - The move to perform.
+ */
 function performMoveOrCapture(gameState, move) {
     const fromRow = gameState.selectedPiece.row;
     const fromCol = gameState.selectedPiece.col;
-    const toRow = move.row;
-    const toCol = move.col;
+    // Handle both human moves (move.row) and AI moves (move.to.row)
+    const toRow = move.to ? move.to.row : move.row;
+    const toCol = move.to ? move.to.col : move.col;
+
+    // Add boundary validation
+    if (toRow < 0 || toRow >= 8 || toCol < 0 || toCol >= 8 || 
+        fromRow < 0 || fromRow >= 8 || fromCol < 0 || fromCol >= 8) {
+        console.error('Invalid coordinates:', { fromRow, fromCol, toRow, toCol });
+        return;
+    }
 
     gameState.board[toRow][toCol] = gameState.board[fromRow][fromCol];
     gameState.board[fromRow][fromCol] = ' ';
@@ -158,9 +226,12 @@ function performMoveOrCapture(gameState, move) {
     if (move.isCapture) {
         const capturedRow = move.capturedPiece.row;
         const capturedCol = move.capturedPiece.col;
-        gameState.board[capturedRow][capturedCol] = ' ';
+        if (capturedRow >= 0 && capturedRow < 8 && capturedCol >= 0 && capturedCol < 8) {
+            gameState.board[capturedRow][capturedCol] = ' ';
+        }
     }
 
+    // Check for kinging
     if ((gameState.currentPlayer === 'x' && toRow === 0) || (gameState.currentPlayer === 'o' && toRow === 7)) {
         gameState.board[toRow][toCol] = gameState.currentPlayer.toUpperCase();
     }
@@ -169,7 +240,12 @@ function performMoveOrCapture(gameState, move) {
     gameState.selectedPiece.col = toCol;
 }
 
-function initializeGameState() {
+/**
+ * Initializes the game state.
+ * @param {boolean} isSinglePlayer - Whether the game is single-player against AI.
+ * @returns {Object} The initial game state.
+ */
+function initializeGameState(isSinglePlayer) {
     let board = [];
     for (let i = 0; i < 8; i++) {
         let row = [];
@@ -194,11 +270,23 @@ function initializeGameState() {
         possibleMoves: [],
         message: `Turn 1: Player X to move`,
         stopDrawing: false,
+        isSinglePlayer: isSinglePlayer
     };
 }
 
+/**
+ * Updates the possible moves for the selected piece.
+ * @param {Object} gameState - The current state of the game.
+ */
 function updatePossibleMoves(gameState) {
     gameState.possibleMoves = [];
+
+    // Validate selected piece coordinates
+    if (!gameState.selectedPiece || 
+        gameState.selectedPiece.row < 0 || gameState.selectedPiece.row >= 8 ||
+        gameState.selectedPiece.col < 0 || gameState.selectedPiece.col >= 8) {
+        return;
+    }
 
     let piece = gameState.board[gameState.selectedPiece.row][gameState.selectedPiece.col];
     let isKing = piece === piece.toUpperCase();
@@ -242,6 +330,11 @@ function updatePossibleMoves(gameState) {
     }
 }
 
+/**
+ * Checks if the current player has any valid moves.
+ * @param {Object} gameState - The current state of the game.
+ * @returns {boolean} True if the player has moves, false otherwise.
+ */
 function playerHasMoves(gameState) {
     const player = gameState.currentPlayer;
     for (let row = 0; row < 8; row++) {
@@ -260,8 +353,15 @@ function playerHasMoves(gameState) {
     return false;
 }
 
+/**
+ * Draws the current state of the game to the terminal.
+ * @param {Object} gameState - The current state of the game.
+ */
 function drawGameState(gameState) {
     if (gameState.stopDrawing) return;
+
+    // Clear screen and hide cursor
+    process.stdout.write('\x1B[2J\x1B[0;0H\x1B[?25l');
 
     let output = '';
     output += `Current player: ${gameState.currentPlayer.toUpperCase()}\n`;
@@ -271,12 +371,16 @@ function drawGameState(gameState) {
         let rowStr = '|';
         for (let j = 0; j < 8; j++) {
             let cell = gameState.board[i][j];
-
             let cellStr = ' ' + cell + ' ';
 
-            if (gameState.cursorPosition.row === i && gameState.cursorPosition.col === j) {
+            if (
+                gameState.cursorPosition.row === i &&
+                gameState.cursorPosition.col === j &&
+                (!gameState.isSinglePlayer || gameState.currentPlayer === 'x')
+            ) {
                 cellStr = '[' + cell + ']';
-            } else if (gameState.hasSelectedPiece && gameState.selectedPiece.row === i && gameState.selectedPiece.col === j) {
+            } else if (gameState.hasSelectedPiece && gameState.selectedPiece && 
+                       gameState.selectedPiece.row === i && gameState.selectedPiece.col === j) {
                 cellStr = '{' + cell + '}';
             } else if (gameState.hasSelectedPiece && gameState.possibleMoves.some(m => m.row === i && m.col === j)) {
                 cellStr = '(' + cell + ')';
@@ -288,23 +392,107 @@ function drawGameState(gameState) {
         output += rowStr + '\n';
     }
     output += '--------------------------\n';
-    output += gameState.hasSelectedPiece
-        ? `Use arrow keys to select destination and 'spacebar' to move\n`
-        : `Use arrow keys to select a piece and 'spacebar' to select it\n`;
-    output += `'c' to unselect piece, 'escape' to quit\n`;
+    if (gameState.isSinglePlayer && gameState.currentPlayer === 'o') {
+        output += `AI is thinking...\n`;
+    } else {
+        output += gameState.hasSelectedPiece
+            ? `Use arrow keys to select destination and 'spacebar' to move\n`
+            : `Use arrow keys to select a piece and 'spacebar' to select it\n`;
+        output += `'c' to unselect piece, 'escape' to quit\n`;
+    }
     output += gameState.message;
 
-    process.stdout.write('\x1B[?25l'); // Hide cursor
-    readline.cursorTo(process.stdout, 0, 0);
-    readline.clearScreenDown(process.stdout);
-    console.log(output);
-    process.stdout.write('\x1B[?25h'); // Show cursor
+    process.stdout.write(output);
 }
 
+/**
+ * Hides the terminal cursor.
+ */
 function hideCursor() {
     process.stdout.write('\x1B[?25l');
 }
 
+/**
+ * Shows the terminal cursor.
+ */
 function showCursor() {
     process.stdout.write('\x1B[?25h');
+}
+
+/**
+ * Performs an AI move for the opponent.
+ * @param {Object} gameState - The current state of the game.
+ */
+function performAIMove(gameState) {
+    let allMoves = [];
+    try {
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                if (gameState.board[row] && gameState.board[row][col] && 
+                    gameState.board[row][col].toLowerCase() === 'o') {
+                    let piece = { row, col };
+                    gameState.selectedPiece = piece;
+                    updatePossibleMoves(gameState);
+                    if (gameState.possibleMoves.length > 0) {
+                        for (let move of gameState.possibleMoves) {
+                            allMoves.push({
+                                from: { row, col },
+                                to: { row: move.row, col: move.col },
+                                isCapture: move.isCapture,
+                                capturedPiece: move.capturedPiece
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in AI move generation:', error);
+        gameState.message = 'AI error occurred. Game ending.';
+        gameState.stopDrawing = true;
+        showCursor();
+        process.exit(1);
+    }
+
+    if (allMoves.length > 0) {
+        // Prioritize capture moves
+        let captureMoves = allMoves.filter(m => m.isCapture);
+        let move;
+        if (captureMoves.length > 0) {
+            move = captureMoves[Math.floor(Math.random() * captureMoves.length)];
+        } else {
+            move = allMoves[Math.floor(Math.random() * allMoves.length)];
+        }
+
+        gameState.selectedPiece = move.from;
+        performMoveOrCapture(gameState, {
+            row: move.to.row,
+            col: move.to.col,
+            isCapture: move.isCapture,
+            capturedPiece: move.capturedPiece
+        });
+
+        // Handle multiple captures
+        if (move.isCapture) {
+            let canContinue = true;
+            while (canContinue) {
+                updatePossibleMoves(gameState);
+                let captureMoves = gameState.possibleMoves.filter(m => m.isCapture);
+                if (captureMoves.length > 0) {
+                    let nextMove = captureMoves[Math.floor(Math.random() * captureMoves.length)];
+                    performMoveOrCapture(gameState, nextMove);
+                } else {
+                    canContinue = false;
+                }
+            }
+        }
+    } else {
+        // No moves available for AI, human player wins
+        const winner = 'X';
+        gameState.message = `Player ${winner} wins. Congratulations!`;
+        gameState.stopDrawing = true;
+        drawGameState(gameState);
+        showCursor();
+        process.exit(0);
+    }
 }
