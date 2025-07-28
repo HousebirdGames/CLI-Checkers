@@ -1,5 +1,135 @@
 const readline = require('readline');
 const keypress = require('keypress');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// Load configuration
+let config;
+try {
+    const configPath = path.join(__dirname, 'config.json');
+    const configFile = fs.readFileSync(configPath, 'utf8');
+    config = JSON.parse(configFile);
+} catch (error) {
+    console.log('Config file not found or invalid, using defaults...');
+    config = {
+        ollama: {
+            host: "localhost",
+            port: 11434,
+            model: "deepseek-r1:1.5b",
+            timeout: 10000,
+            options: {
+                temperature: 1.0,
+                top_p: 0.95
+            }
+        },
+        commentary: {
+            enabled_by_default: false,
+            max_line_width: 60,
+            display_time: 3000
+        },
+        game: {
+            ai_thinking_time: 800,
+            final_message_delay: 3000
+        }
+    };
+}
+
+// Configuration values
+const OLLAMA_HOST = config.ollama.host;
+const OLLAMA_PORT = config.ollama.port;
+const OLLAMA_MODEL = config.ollama.model;
+const OLLAMA_TIMEOUT = config.ollama.timeout;
+const OLLAMA_OPTIONS = config.ollama.options;
+const COMMENTARY_WIDTH = config.commentary.max_line_width;
+const AI_THINKING_TIME = config.game.ai_thinking_time;
+const FINAL_MESSAGE_DELAY = config.game.final_message_delay;
+
+// Commentary system
+const DEFAULT_COMMENTARIES = [
+    "Bold choice! I respect the confidence, but let's see if you can back it up against me.",
+    "Interesting strategy you've got there. I'm curious if you're setting a trap or just hoping for the best.",
+    "Not bad at all! Though I have to wonder... are you thinking ahead or just winging it?",
+    "Playing it safe, are we? I appreciate caution, but sometimes I expect the unexpected from you.",
+    "Ooh, getting fancy now! I love when you take risks. Hope you're ready for my response!",
+    "That's one way to approach it, I suppose. Your unconventional style keeps me on my toes.",
+    "You're really going for it today! This aggressive play could work... or I might just crush it.",
+    "Hmm, ambitious move right there. Either you're brilliant or I'm about to teach you something new."
+];
+
+let commentaryIndex = 0;
+
+/**
+ * Gets the next default commentary message.
+ * @returns {string} A default commentary message.
+ */
+function getNextDefaultCommentary() {
+    const commentary = DEFAULT_COMMENTARIES[commentaryIndex];
+    commentaryIndex = (commentaryIndex + 1) % DEFAULT_COMMENTARIES.length;
+    return commentary;
+}
+
+/**
+ * Gets a motivational message when the player loses.
+ * @returns {string} A motivational message from the AI.
+ */
+function getPlayerLoseMessage() {
+    const messages = [
+        "Hey, good game! You put up a solid fight. I can tell you're getting better at this.",
+        "Don't worry about it! You had some really clever moves there. Want a rematch?",
+        "That was actually pretty challenging! You're definitely improving. Try me again?",
+        "Nice try! I could see you thinking strategically. Keep practicing and you'll get me next time.",
+        "You gave me a run for my money there! A few more games and you might just beat me."
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+}
+
+/**
+ * Gets an apologetic message when the player wins.
+ * @returns {string} An apologetic message from the AI.
+ */
+function getPlayerWinMessage() {
+    const messages = [
+        "Wow, you actually beat me! I have to admit, that was some impressive playing.",
+        "Well played! I didn't see that strategy coming. You really outmaneuvered me there.",
+        "I can't believe it... you actually won! That was genuinely brilliant gameplay.",
+        "Okay, okay, you got me! I was so confident, but you proved me wrong. Respect!",
+        "I'm honestly impressed! You turned the tables on me completely. Well deserved victory!"
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+}
+
+/**
+ * Wraps text to a specified width.
+ * @param {string} text - The text to wrap.
+ * @param {number} width - The maximum width per line.
+ * @returns {string} The wrapped text.
+ */
+function wrapText(text, width) {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = '';
+
+    for (const word of words) {
+        if ((currentLine + word).length <= width) {
+            currentLine += (currentLine ? ' ' : '') + word;
+        } else {
+            if (currentLine) {
+                lines.push(currentLine);
+                currentLine = word;
+            } else {
+                // Word is longer than width, just add it
+                lines.push(word);
+            }
+        }
+    }
+
+    if (currentLine) {
+        lines.push(currentLine);
+    }
+
+    return lines.join('\n');
+}
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -22,13 +152,32 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
 });
 
+// Display current config
+console.log(`🎮 Checkers Game - Config: ${OLLAMA_MODEL} @ ${OLLAMA_HOST}:${OLLAMA_PORT}\n`);
+
 // Ask the user if they want to play against the AI
 rl.question('Do you want to play against the AI? (y/n): ', (answer) => {
     let isSinglePlayer = answer.trim().toLowerCase() === 'y';
 
-    // Initialize game state
-    let gameState = initializeGameState(isSinglePlayer);
+    if (isSinglePlayer) {
+        const defaultChoice = config.commentary.enabled_by_default ? 'y' : 'n';
+        rl.question(`Enable AI commentary? (y/n) [${defaultChoice}]: `, (commentaryAnswer) => {
+            let enableCommentary = commentaryAnswer.trim() === '' ?
+                config.commentary.enabled_by_default :
+                commentaryAnswer.trim().toLowerCase() === 'y';
 
+            // Initialize game state
+            let gameState = initializeGameState(isSinglePlayer, enableCommentary);
+            startGame(gameState);
+        });
+    } else {
+        // Initialize game state
+        let gameState = initializeGameState(isSinglePlayer, false);
+        startGame(gameState);
+    }
+});
+
+function startGame(gameState) {
     hideCursor();
     drawGameState(gameState);
 
@@ -82,7 +231,7 @@ rl.question('Do you want to play against the AI? (y/n): ', (answer) => {
 
         drawGameState(gameState);
     });
-});
+}
 
 /**
  * Moves the selection cursor on the board.
@@ -110,13 +259,13 @@ function handleReturnKey(gameState) {
     gameState.message = '';
     const row = gameState.cursorPosition.row;
     const col = gameState.cursorPosition.col;
-    
+
     // Validate cursor position
     if (row < 0 || row >= 8 || col < 0 || col >= 8) {
         gameState.message = 'Invalid position';
         return;
     }
-    
+
     const cell = gameState.board[row][col];
 
     if (!gameState.hasSelectedPiece) {
@@ -141,9 +290,17 @@ function handleReturnKey(gameState) {
                 if (gameState.possibleMoves.some(m => m.isCapture)) {
                     gameState.message = 'You can make another capture';
                 } else {
+                    // Request commentary for this move
+                    if (gameState.enableCommentary) {
+                        requestAsyncCommentary(gameState);
+                    }
                     nextRound(gameState);
                 }
             } else {
+                // Request commentary for this move
+                if (gameState.enableCommentary) {
+                    requestAsyncCommentary(gameState);
+                }
                 nextRound(gameState);
             }
         } else {
@@ -165,18 +322,20 @@ function nextRound(gameState) {
     gameState.selectedPiece = null;
     gameState.possibleMoves = [];
     gameState.round++;
-
-    gameState.message = `Turn ${gameState.round}: Player ${gameState.currentPlayer.toUpperCase()} to move`;
+    gameState.message = `Use arrow keys and spacebar to play`;
 
     if (gameState.isSinglePlayer && gameState.currentPlayer === 'o') {
-        // AI's turn
+        // AI's turn - simulate thinking time
+        gameState.message = 'AI is thinking...';
+        drawGameState(gameState);
+
         setTimeout(() => {
             performAIMove(gameState);
             if (!gameState.stopDrawing) {
                 nextRound(gameState);
                 drawGameState(gameState);
             }
-        }, 500); // Delay to simulate thinking time
+        }, AI_THINKING_TIME); // Configurable AI thinking time
     } else {
         // Human player's turn
         outerLoop:
@@ -192,11 +351,27 @@ function nextRound(gameState) {
 
         if (!playerHasMoves(gameState)) {
             const winner = gameState.currentPlayer === 'x' ? 'O' : 'X';
-            gameState.message = `Player ${winner} wins. Congratulations!`;
+            if (gameState.isSinglePlayer && gameState.enableCommentary) {
+                if (winner === 'X') {
+                    // Player wins
+                    gameState.message = `You win! Congratulations!`;
+                    gameState.currentCommentary = wrapText(getPlayerWinMessage(), COMMENTARY_WIDTH);
+                } else {
+                    // AI wins
+                    gameState.message = `AI wins!`;
+                    gameState.currentCommentary = wrapText(getPlayerLoseMessage(), COMMENTARY_WIDTH);
+                }
+            } else {
+                gameState.message = `Player ${winner} wins. Congratulations!`;
+            }
             gameState.stopDrawing = true;
             drawGameState(gameState);
             showCursor();
-            process.exit(0);
+
+            // Give user time to read the final message
+            setTimeout(() => {
+                process.exit(0);
+            }, FINAL_MESSAGE_DELAY);
         }
     }
 }
@@ -214,7 +389,7 @@ function performMoveOrCapture(gameState, move) {
     const toCol = move.to ? move.to.col : move.col;
 
     // Add boundary validation
-    if (toRow < 0 || toRow >= 8 || toCol < 0 || toCol >= 8 || 
+    if (toRow < 0 || toRow >= 8 || toCol < 0 || toCol >= 8 ||
         fromRow < 0 || fromRow >= 8 || fromCol < 0 || fromCol >= 8) {
         console.error('Invalid coordinates:', { fromRow, fromCol, toRow, toCol });
         return;
@@ -243,9 +418,10 @@ function performMoveOrCapture(gameState, move) {
 /**
  * Initializes the game state.
  * @param {boolean} isSinglePlayer - Whether the game is single-player against AI.
+ * @param {boolean} enableCommentary - Whether to enable AI commentary.
  * @returns {Object} The initial game state.
  */
-function initializeGameState(isSinglePlayer) {
+function initializeGameState(isSinglePlayer, enableCommentary = false) {
     let board = [];
     for (let i = 0; i < 8; i++) {
         let row = [];
@@ -268,9 +444,12 @@ function initializeGameState(isSinglePlayer) {
         round: 1,
         hasSelectedPiece: false,
         possibleMoves: [],
-        message: `Turn 1: Player X to move`,
+        message: `Use arrow keys and spacebar to play`,
         stopDrawing: false,
-        isSinglePlayer: isSinglePlayer
+        isSinglePlayer: isSinglePlayer,
+        enableCommentary: enableCommentary,
+        currentCommentary: null, // Start with no commentary
+        commentaryPending: false
     };
 }
 
@@ -282,7 +461,7 @@ function updatePossibleMoves(gameState) {
     gameState.possibleMoves = [];
 
     // Validate selected piece coordinates
-    if (!gameState.selectedPiece || 
+    if (!gameState.selectedPiece ||
         gameState.selectedPiece.row < 0 || gameState.selectedPiece.row >= 8 ||
         gameState.selectedPiece.col < 0 || gameState.selectedPiece.col >= 8) {
         return;
@@ -364,11 +543,14 @@ function drawGameState(gameState) {
     process.stdout.write('\x1B[2J\x1B[0;0H\x1B[?25l');
 
     let output = '';
-    output += `Current player: ${gameState.currentPlayer.toUpperCase()}\n`;
-    output += `Round: ${gameState.round}\n`;
-    output += '--------------------------\n';
+    output += `Turn ${gameState.round} - Player ${gameState.currentPlayer.toUpperCase()}\n`;
+
+    // Add column headers
+    output += '    a  b  c  d  e  f  g  h\n';
+    output += '  ┌────────────────────────┐\n';
+
     for (let i = 0; i < 8; i++) {
-        let rowStr = '|';
+        let rowStr = `${8 - i} │`;
         for (let j = 0; j < 8; j++) {
             let cell = gameState.board[i][j];
             let cellStr = ' ' + cell + ' ';
@@ -379,8 +561,8 @@ function drawGameState(gameState) {
                 (!gameState.isSinglePlayer || gameState.currentPlayer === 'x')
             ) {
                 cellStr = '[' + cell + ']';
-            } else if (gameState.hasSelectedPiece && gameState.selectedPiece && 
-                       gameState.selectedPiece.row === i && gameState.selectedPiece.col === j) {
+            } else if (gameState.hasSelectedPiece && gameState.selectedPiece &&
+                gameState.selectedPiece.row === i && gameState.selectedPiece.col === j) {
                 cellStr = '{' + cell + '}';
             } else if (gameState.hasSelectedPiece && gameState.possibleMoves.some(m => m.row === i && m.col === j)) {
                 cellStr = '(' + cell + ')';
@@ -388,19 +570,39 @@ function drawGameState(gameState) {
 
             rowStr += cellStr;
         }
-        rowStr += '|';
+        rowStr += '│';
         output += rowStr + '\n';
     }
-    output += '--------------------------\n';
+    output += '  └────────────────────────┘\n';
+
+    // Show current message
+    output += gameState.message + '\n';
+
+    // Show controls based on current state
     if (gameState.isSinglePlayer && gameState.currentPlayer === 'o') {
-        output += `AI is thinking...\n`;
+        // AI turn - no controls needed
     } else {
-        output += gameState.hasSelectedPiece
-            ? `Use arrow keys to select destination and 'spacebar' to move\n`
-            : `Use arrow keys to select a piece and 'spacebar' to select it\n`;
-        output += `'c' to unselect piece, 'escape' to quit\n`;
+        if (gameState.hasSelectedPiece) {
+            output += `Move: arrow keys + spacebar | Cancel: 'c' | Quit: escape\n`;
+        } else {
+            output += `Select: arrow keys + spacebar | Quit: escape\n`;
+        }
     }
-    output += gameState.message;
+
+    // Show AI commentary if available
+    if (gameState.currentCommentary && gameState.isSinglePlayer) {
+        const commentaryLines = gameState.currentCommentary.split('\n');
+        output += `\n💭 AI: ${commentaryLines[0]}`;
+
+        // Add additional lines with proper indentation
+        for (let i = 1; i < commentaryLines.length; i++) {
+            output += `\n     ${commentaryLines[i]}`;
+        }
+
+        if (gameState.commentaryPending) {
+            output += ` 🤔`;
+        }
+    }
 
     process.stdout.write(output);
 }
@@ -420,6 +622,163 @@ function showCursor() {
 }
 
 /**
+ * Starts fetching AI commentary asynchronously without blocking gameplay.
+ * @param {Object} gameState - The current state of the game.
+ */
+function requestAsyncCommentary(gameState) {
+    if (!gameState.enableCommentary || gameState.commentaryPending) return;
+
+    gameState.commentaryPending = true;
+
+    getAICommentary(gameState).then(commentary => {
+        gameState.currentCommentary = commentary;
+        gameState.commentaryPending = false;
+        // Redraw if it's player's turn to show new commentary
+        if (gameState.currentPlayer === 'x' && !gameState.stopDrawing) {
+            drawGameState(gameState);
+        }
+    });
+}
+
+/**
+ * Gets AI commentary about the current game state from Ollama.
+ * @param {Object} gameState - The current state of the game.
+ * @returns {Promise<string>} A promise that resolves to the AI commentary.
+ */
+function getAICommentary(gameState) {
+    return new Promise((resolve) => {
+        // Analyze the board state
+        const gameAnalysis = analyzeGameState(gameState);
+
+        const prompt = `Respond with exactly ONE short trash-talking sentence about your oppenents checkers move. Be cocky but fun.
+
+Current game: Round ${gameState.round}, Opponent: ${gameAnalysis.playerPieces} pieces, You: ${gameAnalysis.aiPieces} pieces.
+
+Examples:
+- "That move was so predictable!"  
+- "I'm already planning my victory!"
+- "Really? That's your strategy?"
+
+Response (one sentence only):`;
+
+        const postData = JSON.stringify({
+            model: OLLAMA_MODEL,
+            prompt: prompt,
+            stream: false,
+            options: OLLAMA_OPTIONS
+        });
+
+
+        const options = {
+            hostname: OLLAMA_HOST,
+            port: OLLAMA_PORT,
+            path: '/api/generate',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        };
+
+        const req = http.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => data += chunk);
+            res.on('end', () => {
+                try {
+                    const response = JSON.parse(data);
+                    let commentary = response.response || "Nice move! Keep watching for captures.";
+
+                    // Clean up the response aggressively
+                    commentary = commentary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                    commentary = commentary.replace(/^["']|["']$/g, ''); // Remove surrounding quotes
+                    commentary = commentary.replace(/^AI:\s*/i, ''); // Remove "AI:" prefix
+                    commentary = commentary.replace(/^Commentary:\s*/i, ''); // Remove "Commentary:" prefix
+                    commentary = commentary.replace(/^Response.*?:\s*/i, ''); // Remove "Response:" prefix
+
+                    // Take only the first sentence and remove internal monologue
+                    const sentences = commentary.split(/[.!?]/);
+                    if (sentences.length > 0) {
+                        commentary = sentences[0].trim();
+                        if (commentary && !commentary.match(/[.!?]$/)) {
+                            commentary += '!'; // Add exclamation for sass
+                        }
+                    }
+
+                    // Remove meta-commentary about the instructions
+                    commentary = commentary.replace(/.*instruction.*|.*sentence.*|.*per.*|.*wait.*|.*let me.*|.*think.*|.*see.*/gi, '');
+
+                    // Word wrap for display
+                    commentary = wrapText(commentary, COMMENTARY_WIDTH);
+
+                    resolve(commentary || getNextDefaultCommentary());
+                } catch (error) {
+                    resolve(getNextDefaultCommentary());
+                }
+            });
+        });
+
+        req.on('error', (error) => {
+            resolve(getNextDefaultCommentary());
+        });
+
+        // Configurable timeout
+        req.setTimeout(OLLAMA_TIMEOUT, () => {
+            req.destroy();
+            resolve(getNextDefaultCommentary());
+        });
+
+        req.write(postData);
+        req.end();
+    });
+}
+
+/**
+ * Analyzes the current game state for AI commentary.
+ * @param {Object} gameState - The current state of the game.
+ * @returns {Object} Analysis of the game state.
+ */
+function analyzeGameState(gameState) {
+    let playerPieces = 0, aiPieces = 0, playerKings = 0, aiKings = 0;
+    let capturesAvailable = false;
+
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = gameState.board[row][col];
+            if (piece === 'x') playerPieces++;
+            else if (piece === 'X') { playerPieces++; playerKings++; }
+            else if (piece === 'o') aiPieces++;
+            else if (piece === 'O') { aiPieces++; aiKings++; }
+        }
+    }
+
+    // Quick check for available captures for AI
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (gameState.board[row][col].toLowerCase() === 'o') {
+                gameState.selectedPiece = { row, col };
+                updatePossibleMoves(gameState);
+                if (gameState.possibleMoves.some(m => m.isCapture)) {
+                    capturesAvailable = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    const position = playerPieces > aiPieces ? 'ahead' :
+        aiPieces > playerPieces ? 'behind' : 'even';
+
+    return {
+        playerPieces,
+        aiPieces,
+        playerKings,
+        aiKings,
+        capturesAvailable,
+        position
+    };
+}
+
+/**
  * Performs an AI move for the opponent.
  * @param {Object} gameState - The current state of the game.
  */
@@ -428,7 +787,7 @@ function performAIMove(gameState) {
     try {
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
-                if (gameState.board[row] && gameState.board[row][col] && 
+                if (gameState.board[row] && gameState.board[row][col] &&
                     gameState.board[row][col].toLowerCase() === 'o') {
                     let piece = { row, col };
                     gameState.selectedPiece = piece;
@@ -450,8 +809,13 @@ function performAIMove(gameState) {
         console.error('Error in AI move generation:', error);
         gameState.message = 'AI error occurred. Game ending.';
         gameState.stopDrawing = true;
+        drawGameState(gameState);
         showCursor();
-        process.exit(1);
+
+        // Give user time to read the error message
+        setTimeout(() => {
+            process.exit(1);
+        }, FINAL_MESSAGE_DELAY);
     }
 
     if (allMoves.length > 0) {
@@ -488,11 +852,19 @@ function performAIMove(gameState) {
         }
     } else {
         // No moves available for AI, human player wins
-        const winner = 'X';
-        gameState.message = `Player ${winner} wins. Congratulations!`;
+        if (gameState.enableCommentary) {
+            gameState.message = `You win! Congratulations!`;
+            gameState.currentCommentary = wrapText(getPlayerWinMessage(), 60);
+        } else {
+            gameState.message = `Player X wins. Congratulations!`;
+        }
         gameState.stopDrawing = true;
         drawGameState(gameState);
         showCursor();
-        process.exit(0);
+
+        // Give user time to read the final message
+        setTimeout(() => {
+            process.exit(0);
+        }, FINAL_MESSAGE_DELAY);
     }
 }
