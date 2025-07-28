@@ -1,0 +1,39 @@
+{
+  "_comment": "Checkers Game Configuration File",
+  "_note": "Copy this to config.json and modify as needed",
+  
+  "ollama": {
+    "_comment": "Ollama API settings",
+    "host": "localhost",
+    "port": 11434,
+    "model": "deepseek-r1:1.5b",
+    "_model_options": "Try: llama2, codellama:13b, gemma2:9b, etc.",
+    "timeout": 10000,
+    "_timeout_note": "Timeout in milliseconds (10 seconds default)",
+    "options": {
+      "_comment": "Ollama generation parameters",
+      "temperature": 1.0,
+      "_temperature_note": "0.0 = deterministic, 1.0+ = creative",
+      "top_p": 0.95,
+      "_top_p_note": "0.1 = focused, 0.95 = diverse"
+    }
+  },
+  
+  "commentary": {
+    "_comment": "AI commentary settings",
+    "enabled_by_default": true,
+    "_enabled_note": "Whether to default to enabled when asking user",
+    "max_line_width": 60,
+    "_width_note": "Maximum characters per line for word wrapping",
+    "display_time": 3000,
+    "_display_note": "How long to show final messages (milliseconds)"
+  },
+  
+  "game": {
+    "_comment": "Game timing settings",
+    "ai_thinking_time": 800,
+    "_thinking_note": "AI delay in milliseconds (realistic thinking time)",
+    "final_message_delay": 3000,
+    "_final_note": "Delay before game exits after win/lose (milliseconds)"
+  }
+}

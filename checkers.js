@@ -4,6 +4,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+// Initialize keypress
+keypress(process.stdin);
+
 // Load configuration
 let config;
 try {
@@ -155,27 +158,138 @@ process.on('uncaughtException', (error) => {
 // Display current config
 console.log(`🎮 Checkers Game - Config: ${OLLAMA_MODEL} @ ${OLLAMA_HOST}:${OLLAMA_PORT}\n`);
 
-// Ask the user if they want to play against the AI
-rl.question('Do you want to play against the AI? (y/n): ', (answer) => {
-    let isSinglePlayer = answer.trim().toLowerCase() === 'y';
+// Start the menu system
+showMainMenu();
 
-    if (isSinglePlayer) {
-        const defaultChoice = config.commentary.enabled_by_default ? 'y' : 'n';
-        rl.question(`Enable AI commentary? (y/n) [${defaultChoice}]: `, (commentaryAnswer) => {
-            let enableCommentary = commentaryAnswer.trim() === '' ?
-                config.commentary.enabled_by_default :
-                commentaryAnswer.trim().toLowerCase() === 'y';
-
-            // Initialize game state
-            let gameState = initializeGameState(isSinglePlayer, enableCommentary);
-            startGame(gameState);
+/**
+ * Shows a menu with arrow key navigation.
+ * @param {string} title - The menu title
+ * @param {Array} options - Array of option objects with {text, value} properties
+ * @param {number} defaultIndex - Default selected index
+ * @param {Function} callback - Callback function that receives the selected value
+ */
+function showMenu(title, options, defaultIndex = 0, callback) {
+    let selectedIndex = defaultIndex;
+    let lastKeyPressTime = 0;
+    
+    function drawMenu() {
+        process.stdout.write('\x1B[2J\x1B[0;0H'); // Clear screen
+        console.log(title);
+        console.log('');
+        
+        options.forEach((option, index) => {
+            const prefix = index === selectedIndex ? '→ ' : '  ';
+            const highlight = index === selectedIndex ? '\x1b[7m' : ''; // Reverse video
+            const reset = index === selectedIndex ? '\x1b[0m' : '';
+            console.log(`${prefix}${highlight}${option.text}${reset}`);
         });
-    } else {
-        // Initialize game state
-        let gameState = initializeGameState(isSinglePlayer, false);
-        startGame(gameState);
+        
+        console.log('');
+        console.log('Use arrow keys to navigate, Enter/Space to select');
     }
-});
+    
+    drawMenu();
+    
+    // Clean up any existing listeners
+    process.stdin.removeAllListeners('keypress');
+    
+    // Set stdin to raw mode to capture keypress events
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    
+    const keyHandler = function (ch, key) {
+        const now = Date.now();
+        if (now - lastKeyPressTime < 100) return; // Debounce keypresses
+        lastKeyPressTime = now;
+        
+        if (key) {
+            switch (key.name) {
+                case 'up':
+                    selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : options.length - 1;
+                    drawMenu();
+                    break;
+                case 'down':
+                    selectedIndex = selectedIndex < options.length - 1 ? selectedIndex + 1 : 0;
+                    drawMenu();
+                    break;
+                case 'return':
+                case 'enter':
+                case 'space':
+                    process.stdin.removeListener('keypress', keyHandler);
+                    process.stdin.setRawMode(false);
+                    // Small delay to prevent key repeat issues
+                    setTimeout(() => {
+                        callback(options[selectedIndex].value);
+                    }, 50);
+                    break;
+                case 'escape':
+                    process.stdin.removeListener('keypress', keyHandler);
+                    process.stdin.setRawMode(false);
+                    showCursor();
+                    process.exit(0);
+                    break;
+            }
+        }
+    };
+    
+    process.stdin.on('keypress', keyHandler);
+}
+
+/**
+ * Shows the main menu for game mode selection.
+ */
+function showMainMenu() {
+    const options = [
+        { text: 'Play against AI', value: 'ai' },
+        { text: 'Play against human', value: 'human' },
+        { text: 'Exit', value: 'exit' }
+    ];
+    
+    showMenu('Select Game Mode:', options, 0, (selectedValue) => {
+        switch (selectedValue) {
+            case 'ai':
+                setTimeout(() => {
+                    showCommentaryMenu();
+                }, 100);
+                break;
+            case 'human':
+                // Initialize game state for human vs human
+                let gameState = initializeGameState(false, false);
+                startGame(gameState);
+                break;
+            case 'exit':
+                showCursor();
+                process.exit(0);
+                break;
+        }
+    });
+}
+
+/**
+ * Shows the commentary menu for AI games.
+ */
+function showCommentaryMenu() {
+    const defaultEnabled = config.commentary.enabled_by_default;
+    const options = [
+        { text: `Enable AI Commentary${defaultEnabled ? ' (default)' : ''}`, value: true },
+        { text: `Disable AI Commentary${!defaultEnabled ? ' (default)' : ''}`, value: false },
+        { text: 'Back to main menu', value: 'back' }
+    ];
+    
+    const defaultIndex = defaultEnabled ? 0 : 1;
+    
+    showMenu('AI Commentary Options:', options, defaultIndex, (selectedValue) => {
+        if (selectedValue === 'back') {
+            setTimeout(() => {
+                showMainMenu();
+            }, 100);
+        } else {
+            // Initialize game state for AI game
+            let gameState = initializeGameState(true, selectedValue);
+            startGame(gameState);
+        }
+    });
+}
 
 function startGame(gameState) {
     hideCursor();
@@ -209,6 +323,7 @@ function startGame(gameState) {
                     moveSelection(gameState, 0, 1);
                     break;
                 case 'return':
+                case 'enter':
                 case 'space':
                     handleReturnKey(gameState);
                     break;

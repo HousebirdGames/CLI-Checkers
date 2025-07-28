@@ -1,0 +1,21 @@
+{
+  "ollama": {
+    "host": "localhost",
+    "port": 11434,
+    "model": "deepseek-r1:1.5b",
+    "timeout": 10000,
+    "options": {
+      "temperature": 1.0,
+      "top_p": 0.95
+    }
+  },
+  "commentary": {
+    "enabled_by_default": true,
+    "max_line_width": 60,
+    "display_time": 3000
+  },
+  "game": {
+    "ai_thinking_time": 800,
+    "final_message_delay": 3000
+  }
+}
